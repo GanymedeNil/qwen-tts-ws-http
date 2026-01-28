@@ -67,9 +67,14 @@ s3:
 
 ### 2. 环境变量
 
-你仍然可以使用环境变量来设置配置项：
+你仍然可以使用环境变量来设置配置项。环境变量的前缀通常是 `DYNACONF_`（除非有特殊配置），但对于某些敏感信息，我们也支持直接读取：
 
-请参考  [dynaconf](https://www.dynaconf.com/envvars/) 给出的命名格式进行配置。
+- `DASHSCOPE_API_KEY`: 阿里云 DashScope 的 API Key。
+
+对于其他配置项，请参考 [dynaconf](https://www.dynaconf.com/envvars/) 给出的命名格式进行配置。例如，设置服务器端口：
+```bash
+export DYNACONF_SERVER__PORT=9001
+```
 
 ## 运行
 
@@ -96,7 +101,7 @@ python main.py
 | 字段 | 类型 | 必填 | 默认值 | 说明                                                                                                                                                                                                                                                         |
 | :--- | :--- | :--- | :--- |:-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | `text` | string | 是 | - | 需要合成的文本内容                                                                                                                                                                                                                                                  |
-| `model` | string | 是 | - | 使用的模型名称， `qwen3-tts-vd-realtime-2025-12-16`、`qwen3-tts-vc-realtime-2026-01-15`、`qwen3-tts-flash-realtime`。具体信息参考：https://bailian.console.aliyun.com/cn-beijing/?spm=5176.12818093_47.overview_recent.1.67fe16d0rXJopC&tab=doc#/doc/?type=model&url=2938790 |
+| `model` | string | 是 | - | 使用的模型名称。具体信息参考：[DashScope 模型列表](https://help.aliyun.com/zh/model-studio/user-guide/qwen-tts-realtime-api?spm=a2c4g.11186623.0.i1#9478426090u7g) |
 | `voice` | string | 否 | `Cherry` | 选用的音色名称                                                                                                                                                                                                                                                    |
 | `return_url` | boolean | 否 | `false` | 是否返回音频 URL 而不是二进制数据（需开启存储功能）                                                                                                                                                                                                                  |
 
@@ -159,9 +164,9 @@ curl -X POST http://localhost:9999/tts_stream \
 data: {"audio": "...", "is_end": false}
 data: {"audio": "...", "is_end": false}
 ...
-data: {"is_end": true, "url": "..."}
+data: {"is_end": true, "url": "...", "usage_characters": "12"}
 ```
-*注：`audio` 字段为 Base64 编码的 PCM (24000Hz, Mono, 16bit) 数据。如果开启了存储功能，最后一条消息会包含音频的 `url`。*
+*注：`audio` 字段为 Base64 编码的 PCM (24000Hz, Mono, 16bit) 数据。如果开启了存储功能，最后一条消息会包含音频的 `url`。`usage_characters` 表示本次合成消耗的字符数。*
 
 ### 3. 健康检查
 
@@ -175,3 +180,5 @@ data: {"is_end": true, "url": "..."}
 在 `/tts` 接口返回时，会包含以下自定义响应头：
 - `X-Session-Id`: 本次合成的会话 ID。
 - `X-First-Audio-Delay`: 首包音频延迟（毫秒）。
+- `X-Usage-Characters`: 本次合成消耗的字符数。
+- `Content-Type`: `audio/wav` (返回二进制时) 或 `application/json` (返回 URL 时)。

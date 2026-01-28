@@ -82,7 +82,8 @@ async def text_to_speech(request: TTSRequest, http_request: Request):
 
         headers = {
             "X-Session-Id": session_id or "",
-            "X-First-Audio-Delay": str(first_audio_delay or 0)
+            "X-First-Audio-Delay": str(first_audio_delay or 0),
+            "X-Usage-Characters":callback.get_usage_characters()
         }
 
         # Encapsulate PCM data into WAV format
@@ -149,14 +150,15 @@ async def text_to_speech_stream(request: TTSRequest, http_request: Request):
                         logger.debug("Stream finished (received None)")
                         # Handle accumulated audio
                         pcm_data = audio_accumulator.getvalue()
+                        usage_characters = callback.get_usage_characters()
                         if pcm_data and ENABLE_SAVE:
                             logger.debug("Saving accumulated audio from stream...")
                             wav_data = pcm_to_wav(pcm_data)
                             file_url = save_audio(wav_data, OUTPUT_DIR, http_request.base_url)
                             logger.info(f"Stream audio saved: {file_url}")
-                            yield f"data: {json.dumps({'is_end': True, 'url': file_url})}\n\n"
+                            yield f"data: {json.dumps({'is_end': True, 'url': file_url, 'usage_characters': usage_characters})}\n\n"
                         else:
-                            yield f"data: {json.dumps({'is_end': True})}\n\n"
+                            yield f"data: {json.dumps({'is_end': True, 'usage_characters': usage_characters})}\n\n"
                         break
                     
                     if isinstance(item, dict) and "audio" in item:
