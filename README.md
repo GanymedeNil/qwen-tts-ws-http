@@ -6,6 +6,8 @@
 
 - **简单 HTTP POST**: 一次性获取完整音频（自动封装为 WAV 格式）。
 - **SSE 流式支持**: 实时推送音频分片（Base64 编码的 PCM），降低首包延迟。
+- **多端存储支持**: 支持将合成音频保存至本地或上传至 S3 兼容存储（如 AWS S3, Minio）。
+- **灵活的返回方式**: 支持直接返回音频二进制数据，或返回音频存储后的访问 URL。
 - **自动格式转换**: 内部处理 PCM 到 WAV 的转换，方便播放器直接调用。
 - **健康检查**: 提供 `/health` 接口用于服务监控。
 
@@ -38,31 +40,36 @@ default:
     url: "wss://dashscope.aliyuncs.com/api-ws/v1/realtime"
   server:
     host: "0.0.0.0"
-    port: 9000
+    port: 9999
+  enableSave: true # 是否保存合成后的音频
+  storageType: "local" # 存储类型：local 或 s3
+  outputDir: "./output" # 本地存储目录
+
+  # S3 存储配置 (当 storageType 为 s3 时必填)
+  s3:
+    bucket: "your-bucket-name"
+    endpoint: "http://localhost:9000" # S3 服务地址
+    region: "us-west-1"
+    publicUrlPrefix: "" # 可选，自定义域名协议头
+    urlType: "public" # 链接类型：public 或 private
+    expiresIn: 3600 # 私有链接有效期（秒）
 ```
 
 敏感信息（如 API Key）建议存放在 `.secrets.yaml`（该文件已被 `.gitignore` 忽略）：
 
 ```yaml
 dashscope_api_key: "您的_DASHSCOPE_API_KEY"
+# 也可以在这里存放 S3 密钥
+s3:
+  accessKeyId: "..."
+  accessKeySecret: "..."
 ```
 
 ### 2. 环境变量
 
 你仍然可以使用环境变量来设置配置项：
 
-#### macOS/Linux
-```bash
-export DASHSCOPE_API_KEY="您的_DASHSCOPE_API_KEY"
-# 或者设置端口
-export SERVER_PORT=9000
-```
-
-#### Windows (PowerShell)
-```powershell
-$env:DASHSCOPE_API_KEY="您的_DASHSCOPE_API_KEY"
-$env:SERVER_PORT=9000
-```
+请参考  [dynaconf](https://www.dynaconf.com/envvars/) 给出的命名格式进行配置。
 
 ## 运行
 
@@ -72,7 +79,7 @@ $env:SERVER_PORT=9000
 python main.py
 ```
 
-服务默认监听 `0.0.0.0:9000`。
+服务默认监听 `0.0.0.0:9999`。
 
 ## API 文档
 
@@ -91,17 +98,37 @@ python main.py
 | `text` | string | 是 | - | 需要合成的文本内容                                                                                                                                                                                                                                                  |
 | `model` | string | 是 | - | 使用的模型名称， `qwen3-tts-vd-realtime-2025-12-16`、`qwen3-tts-vc-realtime-2026-01-15`、`qwen3-tts-flash-realtime`。具体信息参考：https://bailian.console.aliyun.com/cn-beijing/?spm=5176.12818093_47.overview_recent.1.67fe16d0rXJopC&tab=doc#/doc/?type=model&url=2938790 |
 | `voice` | string | 否 | `Cherry` | 选用的音色名称                                                                                                                                                                                                                                                    |
+| `return_url` | boolean | 否 | `false` | 是否返回音频 URL 而不是二进制数据（需开启存储功能）                                                                                                                                                                                                                  |
 
-**示例请求 (cURL)**:
+**示例请求 (cURL - 返回二进制)**:
 
 ```bash
-curl -X POST http://localhost:9000/tts \
+curl -X POST http://localhost:9999/tts \
   -H "Content-Type: application/json" \
   -d '{
     "text": "你好，欢迎使用通义千问语音合成服务。",
     "model": "qwen3-tts-flash-realtime",
     "voice": "Cherry"
   }' --output output.wav
+```
+
+**示例请求 (cURL - 返回 URL)**:
+
+```bash
+curl -X POST http://localhost:9999/tts \
+  -H "Content-Type: application/json" \
+  -d '{
+    "text": "你好，欢迎使用通义千问语音合成服务。",
+    "model": "qwen3-tts-flash-realtime",
+    "return_url": true
+  }'
+```
+
+**示例返回 (JSON)**:
+```json
+{
+  "url": "http://localhost:9999/output/xxxx.wav"
+}
 ```
 
 ### 2. 流式文本转语音 (SSE)
@@ -117,7 +144,7 @@ curl -X POST http://localhost:9000/tts \
 **示例请求 (cURL)**:
 
 ```bash
-curl -X POST http://localhost:9000/tts_stream \
+curl -X POST http://localhost:9999/tts_stream \
   -H "Content-Type: application/json" \
   -d '{
     "text": "你好，这是一个流式输出测试。",
@@ -132,9 +159,9 @@ curl -X POST http://localhost:9000/tts_stream \
 data: {"audio": "...", "is_end": false}
 data: {"audio": "...", "is_end": false}
 ...
-data: {"is_end": true}
+data: {"is_end": true, "url": "..."}
 ```
-*注：`audio` 字段为 Base64 编码的 PCM (24000Hz, Mono, 16bit) 数据。*
+*注：`audio` 字段为 Base64 编码的 PCM (24000Hz, Mono, 16bit) 数据。如果开启了存储功能，最后一条消息会包含音频的 `url`。*
 
 ### 3. 健康检查
 

@@ -2,6 +2,14 @@ dashscope:
   url: "wss://dashscope.aliyuncs.com/api-ws/v1/realtime"
 server:
   host: "0.0.0.0"
-  port: 9000
-saveToLocal: true
+  port: 9999
+enableSave: true
+storageType: "s3" # options: local, s3
 outputDir: "./output"
+s3:
+  bucket: "test"
+  endpoint: "http://127.0.0.1:9000"
+  region: "us-west-1"
+  publicUrlPrefix: "" # Optional, if set, use this instead of default S3 URL
+  urlType: "private" # options: public, private
+  expiresIn: 3600 # URL expiration time in seconds, only for private urlType

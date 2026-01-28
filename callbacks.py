@@ -14,7 +14,6 @@ class HttpCallback(QwenTtsRealtimeCallback):
         pass
 
     def on_close(self, close_status_code, close_msg) -> None:
-        # print(f'connection closed: {close_status_code}, {close_msg}')
         self.complete_event.set()
 
     def on_event(self, response: str) -> None:

@@ -16,14 +16,14 @@ from utils import init_dashscope_api_key, pcm_to_wav, save_audio
 
 app = FastAPI()
 
-# Configure output directory
-SAVE_TO_LOCAL = settings.get("SAVE_TO_LOCAL", True)
-if isinstance(SAVE_TO_LOCAL, str):
-    SAVE_TO_LOCAL = SAVE_TO_LOCAL.lower() == "true"
+# Configure storage
+ENABLE_SAVE = settings.get("enableSave", True)
+if isinstance(ENABLE_SAVE, str):
+    ENABLE_SAVE = ENABLE_SAVE.lower() == "true"
 
-OUTPUT_DIR = settings.get("OUTPUT_DIR", "output")
-
-if SAVE_TO_LOCAL:
+STORAGE_TYPE = settings.get("storageType", "local").lower()
+OUTPUT_DIR = settings.get("outputDir", "output")
+if ENABLE_SAVE and STORAGE_TYPE == "local":
     if not os.path.exists(OUTPUT_DIR):
         os.makedirs(OUTPUT_DIR)
     # Mount static files to serve saved audio
@@ -77,12 +77,12 @@ async def text_to_speech(request: TTSRequest, http_request: Request):
         wav_audio_data = pcm_to_wav(audio_data)
 
         file_url = None
-        if SAVE_TO_LOCAL:
+        if ENABLE_SAVE:
             file_url = save_audio(wav_audio_data, OUTPUT_DIR, http_request.base_url)
 
         if request.return_url:
-            if not SAVE_TO_LOCAL:
-                raise HTTPException(status_code=400, detail="Local saving is disabled, cannot return URL")
+            if not ENABLE_SAVE:
+                raise HTTPException(status_code=400, detail="Saving is disabled, cannot return URL")
             return Response(content=json.dumps({"url": file_url}), media_type="application/json", headers=headers)
 
         return Response(content=wav_audio_data, media_type="audio/wav", headers=headers)
@@ -128,7 +128,7 @@ async def text_to_speech_stream(request: TTSRequest, http_request: Request):
                     if item is None:
                         # Handle accumulated audio
                         pcm_data = audio_accumulator.getvalue()
-                        if pcm_data and SAVE_TO_LOCAL:
+                        if pcm_data and ENABLE_SAVE:
                             wav_data = pcm_to_wav(pcm_data)
                             file_url = save_audio(wav_data, OUTPUT_DIR, http_request.base_url)
                             yield f"data: {json.dumps({'is_end': True, 'url': file_url})}\n\n"
