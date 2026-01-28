@@ -3,10 +3,13 @@ import base64
 import threading
 import queue
 import json
+import os
+import uuid
 import dashscope
 from dashscope.audio.qwen_tts_realtime import *
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import Response, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from typing import Optional
 import uvicorn
@@ -14,6 +17,19 @@ import wave
 from config import settings
 
 app = FastAPI()
+
+# Configure output directory
+SAVE_TO_LOCAL = settings.get("SAVE_TO_LOCAL", True)
+if isinstance(SAVE_TO_LOCAL, str):
+    SAVE_TO_LOCAL = SAVE_TO_LOCAL.lower() == "true"
+
+OUTPUT_DIR = settings.get("OUTPUT_DIR", "output")
+
+if SAVE_TO_LOCAL:
+    if not os.path.exists(OUTPUT_DIR):
+        os.makedirs(OUTPUT_DIR)
+    # Mount static files to serve saved audio
+    app.mount("/output", StaticFiles(directory=OUTPUT_DIR), name="output")
 
 
 def init_dashscope_api_key():
@@ -47,7 +63,8 @@ def pcm_to_wav(pcm_data, sample_rate=24000, channels=1, sample_width=2):
 class TTSRequest(BaseModel):
     text: str
     model: str
-    voice: Optional[str] = 'Cherry'
+    voice: Optional[str] = 'Cherry',
+    return_url: Optional[bool] = False
 
 
 class HttpCallback(QwenTtsRealtimeCallback):
@@ -117,7 +134,7 @@ class SSECallback(QwenTtsRealtimeCallback):
 
 
 @app.post("/tts")
-async def text_to_speech(request: TTSRequest):
+async def text_to_speech(request: TTSRequest, http_request: Request):
     callback = HttpCallback()
 
     # Initialize QwenTtsRealtime for each request to ensure isolation
@@ -151,13 +168,29 @@ async def text_to_speech(request: TTSRequest):
         if not audio_data:
             raise HTTPException(status_code=500, detail="No audio data generated")
 
-        # Encapsulate PCM data into WAV format
-        wav_audio_data = pcm_to_wav(audio_data)
-
         headers = {
             "X-Session-Id": qwen_tts_realtime.get_session_id() or "",
             "X-First-Audio-Delay": str(qwen_tts_realtime.get_first_audio_delay() or 0)
         }
+
+        # Encapsulate PCM data into WAV format
+        wav_audio_data = pcm_to_wav(audio_data)
+
+        file_url = None
+        if SAVE_TO_LOCAL:
+            # Save to local file
+            file_name = f"{uuid.uuid4()}.wav"
+            file_path = os.path.join(OUTPUT_DIR, file_name)
+            with open(file_path, "wb") as f:
+                f.write(wav_audio_data)
+            
+            base_url = str(http_request.base_url).rstrip('/')
+            file_url = f"{base_url}/output/{file_name}"
+
+        if request.return_url:
+            if not SAVE_TO_LOCAL:
+                raise HTTPException(status_code=400, detail="Local saving is disabled, cannot return URL")
+            return Response(content=json.dumps({"url": file_url}), media_type="application/json", headers=headers)
 
         return Response(content=wav_audio_data, media_type="audio/wav", headers=headers)
 
@@ -172,7 +205,7 @@ async def text_to_speech(request: TTSRequest):
 
 
 @app.post("/tts_stream")
-async def text_to_speech_stream(request: TTSRequest):
+async def text_to_speech_stream(request: TTSRequest, http_request: Request):
     callback = SSECallback()
 
     # Initialize QwenTtsRealtime for each request to ensure isolation
@@ -183,6 +216,7 @@ async def text_to_speech_stream(request: TTSRequest):
     )
 
     def generate():
+        audio_accumulator = io.BytesIO()
         try:
             qwen_tts_realtime.connect()
             qwen_tts_realtime.update_session(
@@ -199,8 +233,25 @@ async def text_to_speech_stream(request: TTSRequest):
                 try:
                     item = callback.queue.get(timeout=30)
                     if item is None:
-                        yield f"data: {json.dumps({'is_end': True})}\n\n"
+                        # Handle accumulated audio
+                        pcm_data = audio_accumulator.getvalue()
+                        if pcm_data and SAVE_TO_LOCAL:
+                            wav_data = pcm_to_wav(pcm_data)
+                            file_name = f"{uuid.uuid4()}.wav"
+                            file_path = os.path.join(OUTPUT_DIR, file_name)
+                            with open(file_path, "wb") as f:
+                                f.write(wav_data)
+                            
+                            base_url = str(http_request.base_url).rstrip('/')
+                            file_url = f"{base_url}/output/{file_name}"
+                            yield f"data: {json.dumps({'is_end': True, 'url': file_url})}\n\n"
+                        else:
+                            yield f"data: {json.dumps({'is_end': True})}\n\n"
                         break
+                    
+                    if isinstance(item, dict) and "audio" in item:
+                        audio_accumulator.write(base64.b64decode(item["audio"]))
+
                     yield f"data: {json.dumps(item)}\n\n"
                 except queue.Empty:
                     yield f"data: {json.dumps({'error': 'Timeout waiting for audio'})}\n\n"
