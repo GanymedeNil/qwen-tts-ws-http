@@ -54,6 +54,11 @@ async def text_to_speech(request: TTSRequest, http_request: Request):
             response_format=AudioFormat.PCM_24000HZ_MONO_16BIT,
             mode='server_commit',
             format='pcm',
+            language_type=request.language_type,
+            sample_rate=request.sample_rate,
+            pitch_rate=request.pitch_rate,
+            speech_rate=request.speech_rate,
+            volume=request.volume,
         )
 
         logger.debug(f"Appending text: {request.text[:50]}...")
@@ -137,6 +142,11 @@ async def text_to_speech_stream(request: TTSRequest, http_request: Request):
                 response_format=AudioFormat.PCM_24000HZ_MONO_16BIT,
                 mode='server_commit',
                 format='pcm',
+                language_type=request.language_type,
+                sample_rate=request.sample_rate,
+                pitch_rate=request.pitch_rate,
+                speech_rate=request.speech_rate,
+                volume=request.volume,
             )
 
             logger.debug(f"Appending text (stream): {request.text[:50]}...")
