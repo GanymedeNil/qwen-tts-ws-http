@@ -1,20 +1,18 @@
 import io
 import base64
-import threading
-import queue
 import json
 import os
-import uuid
-import dashscope
-from dashscope.audio.qwen_tts_realtime import *
+import queue
+from dashscope.audio.qwen_tts_realtime import QwenTtsRealtime, AudioFormat
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
-from typing import Optional
 import uvicorn
-import wave
+
 from config import settings
+from models import TTSRequest
+from callbacks import HttpCallback, SSECallback
+from utils import init_dashscope_api_key, pcm_to_wav, save_audio
 
 app = FastAPI()
 
@@ -31,106 +29,8 @@ if SAVE_TO_LOCAL:
     # Mount static files to serve saved audio
     app.mount("/output", StaticFiles(directory=OUTPUT_DIR), name="output")
 
-
-def init_dashscope_api_key():
-    """
-    Set your DashScope API-key.
-    """
-    api_key = settings.get('DASHSCOPE_API_KEY') or settings.get('dashscope_api_key')
-    if api_key:
-        dashscope.api_key = api_key
-    else:
-        raise RuntimeError("DASHSCOPE_API_KEY is not set in settings or environment variables")
-
-
 # Initialize API key on startup
 init_dashscope_api_key()
-
-
-def pcm_to_wav(pcm_data, sample_rate=24000, channels=1, sample_width=2):
-    """
-    Encapsulate PCM data into WAV format.
-    """
-    wav_buf = io.BytesIO()
-    with wave.open(wav_buf, 'wb') as wav_file:
-        wav_file.setnchannels(channels)
-        wav_file.setsampwidth(sample_width)
-        wav_file.setframerate(sample_rate)
-        wav_file.writeframes(pcm_data)
-    return wav_buf.getvalue()
-
-
-class TTSRequest(BaseModel):
-    text: str
-    model: str
-    voice: Optional[str] = 'Cherry',
-    return_url: Optional[bool] = False
-
-
-class HttpCallback(QwenTtsRealtimeCallback):
-    def __init__(self):
-        self.complete_event = threading.Event()
-        self.buffer = io.BytesIO()
-        self.error_msg = None
-
-    def on_open(self) -> None:
-        pass
-
-    def on_close(self, close_status_code, close_msg) -> None:
-        # print(f'connection closed: {close_status_code}, {close_msg}')
-        self.complete_event.set()
-
-    def on_event(self, response: str) -> None:
-        try:
-            type = response.get('type')
-            if 'response.audio.delta' == type:
-                recv_audio_b64 = response.get('delta')
-                if recv_audio_b64:
-                    self.buffer.write(base64.b64decode(recv_audio_b64))
-            elif 'session.finished' == type:
-                self.complete_event.set()
-            elif 'error' == type:
-                self.error_msg = response.get('message', 'Unknown error')
-                self.complete_event.set()
-        except Exception as e:
-            self.error_msg = str(e)
-            self.complete_event.set()
-
-    def wait_for_finished(self, timeout=30):
-        return self.complete_event.wait(timeout=timeout)
-
-    def get_audio_data(self):
-        return self.buffer.getvalue()
-
-
-class SSECallback(QwenTtsRealtimeCallback):
-    def __init__(self):
-        self.queue = queue.Queue()
-        self.error_msg = None
-
-    def on_open(self) -> None:
-        pass
-
-    def on_close(self, close_status_code, close_msg) -> None:
-        self.queue.put(None)
-
-    def on_event(self, response: dict) -> None:
-        try:
-            event_type = response.get('type')
-            if 'response.audio.delta' == event_type:
-                audio_delta = response.get('delta')
-                if audio_delta:
-                    self.queue.put({"audio": audio_delta, "is_end": False})
-            elif 'session.finished' == event_type:
-                self.queue.put(None)
-            elif 'error' == event_type:
-                self.error_msg = response.get('message', 'Unknown error')
-                self.queue.put({"error": self.error_msg})
-                self.queue.put(None)
-        except Exception as e:
-            self.error_msg = str(e)
-            self.queue.put({"error": self.error_msg})
-            self.queue.put(None)
 
 
 @app.post("/tts")
@@ -178,14 +78,7 @@ async def text_to_speech(request: TTSRequest, http_request: Request):
 
         file_url = None
         if SAVE_TO_LOCAL:
-            # Save to local file
-            file_name = f"{uuid.uuid4()}.wav"
-            file_path = os.path.join(OUTPUT_DIR, file_name)
-            with open(file_path, "wb") as f:
-                f.write(wav_audio_data)
-            
-            base_url = str(http_request.base_url).rstrip('/')
-            file_url = f"{base_url}/output/{file_name}"
+            file_url = save_audio(wav_audio_data, OUTPUT_DIR, http_request.base_url)
 
         if request.return_url:
             if not SAVE_TO_LOCAL:
@@ -237,13 +130,7 @@ async def text_to_speech_stream(request: TTSRequest, http_request: Request):
                         pcm_data = audio_accumulator.getvalue()
                         if pcm_data and SAVE_TO_LOCAL:
                             wav_data = pcm_to_wav(pcm_data)
-                            file_name = f"{uuid.uuid4()}.wav"
-                            file_path = os.path.join(OUTPUT_DIR, file_name)
-                            with open(file_path, "wb") as f:
-                                f.write(wav_data)
-                            
-                            base_url = str(http_request.base_url).rstrip('/')
-                            file_url = f"{base_url}/output/{file_name}"
+                            file_url = save_audio(wav_data, OUTPUT_DIR, http_request.base_url)
                             yield f"data: {json.dumps({'is_end': True, 'url': file_url})}\n\n"
                         else:
                             yield f"data: {json.dumps({'is_end': True})}\n\n"
